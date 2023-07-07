@@ -1,118 +1,225 @@
-import Image from 'next/image'
-import { Inter } from 'next/font/google'
+/* eslint-disable @next/next/no-img-element */
+import Image from "next/image";
+import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { formatCompact, getCosmWasmStargateClientForChainID } from "@/utils";
+import { BAD_KIDS_ADDRESS, MARKETPLACE_ADDRESS } from "@/config/constants";
+import { ethers } from "ethers";
+import Link from "next/link";
+import { Ask } from "@/types";
+import axios from "axios";
 
-const inter = Inter({ subsets: ['latin'] })
+const formatter = Intl.NumberFormat("en", { notation: "compact" });
+
+interface PageInfo {
+  limit: number;
+  offset: number;
+  total: number;
+}
+
+interface Collection {
+  id: string;
+  name: string;
+  description: string;
+  media: {
+    type: string;
+    url: string;
+  };
+  floorPrice: string;
+}
+
+interface CollectionsResult {
+  collections: Collection[];
+  pageInfo: PageInfo;
+}
+
+interface CollectionsResponse {
+  collections: CollectionsResult;
+}
+
+interface QueryResponse<T> {
+  data: T;
+}
+
+function useCollectionsQuery() {
+  return useQuery({
+    queryKey: ["collections"],
+    queryFn: async () => {
+      const query = /* GraphQL */ `
+        query {
+          collections(sortBy: VOLUME_24_HOUR_DESC) {
+            pageInfo {
+              limit
+              offset
+              total
+            }
+            collections {
+              id
+              name
+              description
+              media {
+                type
+                url
+              }
+              floorPrice
+            }
+          }
+        }
+      `;
+
+      const response = await axios.post(
+        "https://graphql.mainnet.stargaze-apis.com/graphql",
+        {
+          query,
+        }
+      );
+
+      const { data } = response.data as QueryResponse<CollectionsResponse>;
+
+      return data.collections;
+    },
+    refetchInterval: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+}
+
+function useAskCount(collection: string) {
+  return useQuery({
+    queryKey: ["askCount", collection],
+    queryFn: async () => {
+      const client = await getCosmWasmStargateClientForChainID("stargaze-1");
+
+      const response = await client.queryContractSmart(MARKETPLACE_ADDRESS, {
+        ask_count: {
+          collection,
+        },
+      });
+
+      return response.count;
+    },
+    refetchInterval: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+}
+
+function useAsks(collection: string, startAfter: number = 0) {
+  return useQuery({
+    queryKey: ["asks", collection, startAfter],
+    queryFn: async () => {
+      const client = await getCosmWasmStargateClientForChainID("stargaze-1");
+
+      const limit = 30;
+
+      const response = await client.queryContractSmart(MARKETPLACE_ADDRESS, {
+        asks: {
+          collection,
+          start_after: startAfter,
+          limit: limit,
+        },
+      });
+
+      return response.asks as Ask[];
+    },
+    refetchInterval: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+}
 
 export default function Home() {
+  // const [asks, setAsks] = useState([]);
+
+  const { data: collectionsQueryData } = useCollectionsQuery();
+
+  // useAskCount(BAD_KIDS_ADDRESS);
+
+  // const { data: asks } = useAsks(BAD_KIDS_ADDRESS, 0);
+
   return (
-    <main
-      className={`flex min-h-screen flex-col items-center justify-between p-24 ${inter.className}`}
-    >
-      <div className="z-10 w-full max-w-5xl items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/pages/index.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="max-w-screen-xl mx-auto p-4 py-8">
+      <div className="grid grid-cols-4 gap-6">
+        {collectionsQueryData
+          ? collectionsQueryData.collections.map((collection, i) => (
+              <Link
+                key={i}
+                className="border border-zinc-700 rounded-lg overflow-hidden"
+                href={`/collection/${collection.id}`}
+              >
+                <img className="w-full" src={collection.media.url} alt="" />
+                <div className="px-4 py-4 space-y-1">
+                  <p className="font-semibold truncate">{collection.name}</p>
+                  <div className="pb-4">
+                    <p className="text-sm text-zinc-500 line-clamp-2">
+                      {collection.description}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-bold text-xs text-pink-500 mb-0.5">
+                      Floor Price
+                    </p>
+                    <p className="text-xs">
+                      {formatCompact(
+                        parseFloat(ethers.formatUnits(collection.floorPrice, 6))
+                      )}{" "}
+                      STARS
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            ))
+          : Array.from({ length: 20 }).map((_, i) => (
+              <div
+                className="bg-zinc-800 aspect-[3/4] rounded-lg animate-pulse"
+                key={i}
+              />
+            ))}
+      </div>
+      {/* <div className="flex gap-4">
+        <button className="border border-slate-600 hover:bg-pink-500 hover:border-pink-500 hover:text-white font-semibold text-slate-300 rounded-lg px-4 py-2">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="w-5 h-5"
           >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
+            <path
+              fillRule="evenodd"
+              d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z"
+              clipRule="evenodd"
             />
-          </a>
-        </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Discover and deploy boilerplate example Next.js&nbsp;projects.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  )
+          </svg>
+        </button>
+        {Array.from(Array(6)).map((_, i) => (
+          <div key={i}>
+            <button className="border border-slate-600 hover:bg-pink-500 hover:border-pink-500 hover:text-white font-semibold text-slate-300 rounded-lg px-4 py-2">
+              {i + 1}
+            </button>
+          </div>
+        ))}
+        <button className="border border-slate-600 hover:bg-pink-500 hover:border-pink-500 hover:text-white font-semibold text-slate-300 rounded-lg px-4 py-2">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="w-5 h-5"
+          >
+            <path
+              fillRule="evenodd"
+              d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+      </div> */}
+    </div>
+  );
 }
