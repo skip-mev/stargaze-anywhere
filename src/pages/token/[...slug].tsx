@@ -1,270 +1,205 @@
 /* eslint-disable @next/next/no-img-element */
+import { useMemo, useState } from "react";
 import * as Select from "@radix-ui/react-select";
+import { ASSETS } from "@/config/constants";
 import { useCollection, useToken } from "@/stargaze/graphql";
+import { useRouter } from "next/router";
+import { ethers } from "ethers";
+import { useQuery } from "@tanstack/react-query";
+import { getPriceFromDefiLlama } from "@/lib/defillama";
+import { MsgsRequest, getMessages, getRoute } from "@/solve/api";
+import { useChain, useManager } from "@cosmos-kit/react";
+import { ChainRecord, WalletStatus } from "@cosmos-kit/core";
 import {
-  formatCompact,
   getAddressForChain,
   getChainByID,
   getSigningCosmWasmClient,
-  getSigningStargateClientForChainID,
-  getStargateClientForChainID,
 } from "@/utils";
-import { ethers } from "ethers";
-import { useRouter } from "next/router";
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import {
-  SwapMsgsRequest,
-  SwapRouteResponse,
-  getSwapMessages,
-  getSwapRoute,
-} from "@/solve/api";
-import { useChain, useManager } from "@cosmos-kit/react";
-import { ChainRecord, WalletStatus } from "@cosmos-kit/core";
-import { IBCDenom } from "@/solve/types";
-import { OfflineSigner, coin } from "@cosmjs/proto-signing";
+import { OfflineSigner } from "@cosmjs/proto-signing";
 import { GasPrice } from "@cosmjs/stargate";
-import BigNumber from "bignumber.js";
 
-const ASSETS = [
-  {
-    id: "ustars",
-    symbol: "STARS",
-    logo: "https://raw.githubusercontent.com/cosmostation/chainlist/main/chain/stargaze/asset/stars.png",
-    chainID: "stargaze-1",
-  },
-  {
-    id: "uatom",
-    symbol: "ATOM",
-    logo: "https://raw.githubusercontent.com/cosmostation/chainlist/main/chain/cosmos/asset/atom.png",
-    chainID: "cosmoshub-4",
-  },
-  {
-    id: "uosmo",
-    symbol: "OSMO",
-    logo: "https://raw.githubusercontent.com/cosmostation/chainlist/main/chain/osmosis/asset/osmo.png",
-    chainID: "osmosis-1",
-  },
-  {
-    id: "uusdc",
-    symbol: "axlUSDC",
-    logo: "https://raw.githubusercontent.com/cosmostation/chainlist/main/chain/ethereum/asset/usdc.png",
-    chainID: "axelar-dojo-1",
-  },
-];
-
-function useGetAmount(target: number, denom: string, chainID: string) {
+function useGetAmount(
+  target: number,
+  denom: string,
+  chainID: string,
+  coinGeckoID: string
+) {
   return useQuery({
-    queryKey: ["get-amount", target, denom, chainID],
+    queryKey: ["get-amount", target, denom, chainID, coinGeckoID],
     queryFn: async () => {
       if (denom === "ustars") {
         return target;
       }
 
-      let low = 0.000001;
-      let high = 9999999.999999;
+      const starsPrice = await getPriceFromDefiLlama("stargaze");
 
-      // let low = 0;
-      // let high = targetAmountOut;
-      let mid;
+      const assetPrice = await getPriceFromDefiLlama(coinGeckoID);
 
-      while (low <= high) {
-        mid = (low + high) / 2;
+      const oneCent = assetPrice / 100;
 
-        const amountIn = ethers.parseUnits(mid.toFixed(6), 6).toString();
-
-        const response = await getSwapRoute({
-          amountIn,
-          sourceAsset: {
-            denom: denom,
-            chainId: chainID,
-          },
-          destAsset: {
-            denom: "ustars",
-            chainId: "stargaze-1",
-          },
-          cumulativeAffiliateFeeBps: "0",
-        });
-
-        const amountOut = parseFloat(
-          ethers.formatUnits(response.userSwapAmountOut, 6)
-        );
-
-        console.log("amountIn", mid);
-        console.log("amountOut", amountOut);
-
-        if (amountOut === target) {
-          throw new Error("Found an exact match");
-          //     return mid; // Found an exact match
-        } else if (amountOut < target) {
-          low = mid + 0.001; // Adjust the lower bound
-        } else {
-          high = mid - 0.001; // Adjust the upper bound
-        }
-      }
-
-      let amountInFloat = low;
+      let amountInFloat = (target / (assetPrice / starsPrice)) * 1.01;
+      let amountOutFloat = 0;
 
       while (true) {
         const amountIn = ethers
           .parseUnits(amountInFloat.toFixed(6), 6)
           .toString();
 
-        const response = await getSwapRoute({
-          amountIn,
-          sourceAsset: {
-            denom: denom,
-            chainId: chainID,
-          },
-          destAsset: {
-            denom: "ustars",
-            chainId: "stargaze-1",
-          },
-          cumulativeAffiliateFeeBps: "0",
+        const route = await getRoute({
+          amount_in: amountIn,
+          source_asset_denom: denom,
+          source_asset_chain_id: chainID,
+          dest_asset_denom: "ustars",
+          dest_asset_chain_id: "stargaze-1",
+          cumulative_affiliate_fee_bps: "0",
         });
 
-        const amountOut = parseFloat(
-          ethers.formatUnits(response.userSwapAmountOut, 6)
+        amountOutFloat = parseFloat(
+          ethers.formatUnits(route.estimated_amount_out as string, 6)
         );
 
-        console.log(amountOut);
-
-        if (amountOut >= target) {
+        if (amountOutFloat >= target) {
           break;
         }
 
-        amountInFloat += 0.001;
+        amountInFloat += oneCent;
       }
 
       return amountInFloat;
     },
-    refetchInterval: false,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    retry: false,
-    enabled: target !== 0,
-  });
-}
-
-function useSwapRoute(
-  amountIn: string,
-  sourceAsset?: IBCDenom,
-  destinationAsset?: IBCDenom,
-  enabled?: boolean
-) {
-  return useQuery({
-    queryKey: ["solve-swap-route", amountIn, sourceAsset, destinationAsset],
-    queryFn: async () => {
-      if (!sourceAsset || !destinationAsset) {
-        return {} as SwapRouteResponse;
-      }
-
-      const response = await getSwapRoute({
-        amountIn,
-        sourceAsset,
-        destAsset: destinationAsset,
-        cumulativeAffiliateFeeBps: "0",
-      });
-
-      return response;
-    },
-    refetchInterval: false,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    retry: false,
-    enabled: enabled && !!sourceAsset && !!destinationAsset && amountIn !== "0",
   });
 }
 
 async function submit(
-  bidAmount: string,
+  amountIn: string,
+  denom: string,
+  chainID: string,
   collectionAddr: string,
   tokenID: string,
-  route: SwapRouteResponse
+  tokenPrice: string
 ) {
   if (!window.keplr) {
     throw new Error("Keplr extension is not installed");
   }
 
-  // get all chain IDs in path and connect in keplr
-  const chainIDs = route.chainIds;
+  const route = await getRoute({
+    amount_in: amountIn,
+    source_asset_denom: denom,
+    source_asset_chain_id: chainID,
+    dest_asset_denom: "ustars",
+    dest_asset_chain_id: "stargaze-1",
+    cumulative_affiliate_fee_bps: "0",
+  });
 
-  await window.keplr.enable(chainIDs);
+  await window.keplr.enable(route.chain_ids);
 
   const userAddresses: Record<string, string> = {};
 
   // get addresses
-  for (const chainID of chainIDs) {
+  for (const chainID of route.chain_ids) {
     const address = await getAddressForChain(chainID);
     userAddresses[chainID] = address;
   }
 
-  const data: SwapMsgsRequest = {
-    preSwapHops: route.preSwapHops,
-    postSwapHops: route.postSwapHops,
+  const data: MsgsRequest = {
+    source_asset_denom: route.source_asset_denom,
+    source_asset_chain_id: route.source_asset_chain_id,
+    dest_asset_denom: route.dest_asset_denom,
+    dest_asset_chain_id: route.dest_asset_chain_id,
 
-    chainIdsToAddresses: userAddresses,
+    amount_in: route.amount_in,
+    operations: route.operations,
 
-    sourceAsset: route.sourceAsset,
-    destAsset: route.destAsset,
-    amountIn: route.amountIn,
+    chain_ids_to_addresses: userAddresses,
 
-    userSwap: route.userSwap,
-    userSwapAmountOut: route.userSwapAmountOut,
-    userSwapSlippageTolerancePercent: "5.0",
-
-    feeSwap: route.feeSwap,
-    affiliates: [],
+    estimated_amount_out: route.estimated_amount_out,
+    slippage_tolerance_percent: "5.0",
   };
 
-  const msgsResponse = await getSwapMessages(data);
+  const msgsResponse = await getMessages(data);
 
-  for (const multihopMessage of msgsResponse.requested) {
-    const msgJSON = JSON.parse(multihopMessage.msg);
+  for (const multihopMessage of msgsResponse.msgs) {
+    let msgJSON = JSON.parse(multihopMessage.msg);
 
-    // let memo = JSON.parse(msgJSON.memo);
-
-    // memo.wasm.msg.swap_with_action.after_swap_action.ibc_transfer.receiver = "";
-
-    // memo.wasm.msg.swap_with_action.after_swap_action.ibc_transfer.next_memo = {
-    //   wasm: {
-    //     contract:
-    //       "stars1fvhcnyddukcqfnt7nlwv3thm5we22lyxyxylr9h77cvgkcn43xfsvgv0pl",
-    //     msg: {
-    //       buy_now: {
-    //         collection: collectionAddr,
-    //         token_id: tokenID,
-    //         expires: Date.now() + 1000 * 60 * 60 * 24 * 7,
-    //       },
-    //     },
-    //   },
-    // };
-
-    const msg = {
-      typeUrl: multihopMessage.msgTypeUrl,
-      value: {
-        sourcePort: msgJSON.source_port,
-        sourceChannel: msgJSON.source_channel,
-        token: msgJSON.token,
-        sender: msgJSON.sender,
-        receiver: msgJSON.receiver,
-        timeoutHeight: msgJSON.timeout_height,
-        timeoutTimestamp: msgJSON.timeout_timestamp,
-        memo: msgJSON.memo,
+    const buyMsg = {
+      buy_now: {
+        collection: collectionAddr,
+        expires: "1691094968348000000",
+        token_id: parseInt(tokenID),
       },
     };
 
-    const key = await window.keplr.getKey(multihopMessage.chainId);
+    const transferMsg = {
+      transfer_nft: {
+        recipient: userAddresses["stargaze-1"],
+        token_id: tokenID,
+      },
+    };
+
+    msgJSON.msg.swap_and_action.post_swap_action.ibc_transfer.ibc_info.receiver =
+      "stars1egt2qedl7ygmuhn6a6tshd6qlmhnsalfppwn9w29g9rarw98n55sat2247";
+
+    msgJSON.msg.swap_and_action.post_swap_action.ibc_transfer.ibc_info.memo =
+      JSON.stringify({
+        wasm: {
+          contract:
+            "stars1egt2qedl7ygmuhn6a6tshd6qlmhnsalfppwn9w29g9rarw98n55sat2247",
+          msg: {
+            execute: {
+              msgs: [
+                {
+                  wasm: {
+                    execute: {
+                      contract_addr:
+                        "stars1fvhcnyddukcqfnt7nlwv3thm5we22lyxyxylr9h77cvgkcn43xfsvgv0pl",
+                      msg: Buffer.from(JSON.stringify(buyMsg)).toString(
+                        "base64"
+                      ),
+                      funds: [
+                        {
+                          amount: ethers.parseUnits(tokenPrice, 6).toString(),
+                          denom: "ustars",
+                        },
+                      ],
+                    },
+                  },
+                },
+                {
+                  wasm: {
+                    execute: {
+                      contract_addr: collectionAddr,
+                      msg: Buffer.from(JSON.stringify(transferMsg)).toString(
+                        "base64"
+                      ),
+                      funds: [],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+    const msg = {
+      typeUrl: "/cosmwasm.wasm.v1.MsgExecuteContract",
+      value: {
+        sender: msgJSON.sender,
+        contract: msgJSON.contract,
+        msg: Uint8Array.from(Buffer.from(JSON.stringify(msgJSON.msg))),
+        funds: msgJSON.funds,
+      },
+    };
+
+    const key = await window.keplr.getKey(multihopMessage.chain_id);
     let signer: OfflineSigner;
     if (key.isNanoLedger) {
-      signer = window.keplr.getOfflineSignerOnlyAmino(multihopMessage.chainId);
+      signer = window.keplr.getOfflineSignerOnlyAmino(multihopMessage.chain_id);
     } else {
-      signer = window.keplr.getOfflineSigner(multihopMessage.chainId);
+      signer = window.keplr.getOfflineSigner(multihopMessage.chain_id);
     }
 
-    const chain = getChainByID(multihopMessage.chainId);
+    const chain = getChainByID(multihopMessage.chain_id);
 
     const feeInfo = chain.fees?.fee_tokens[0];
 
@@ -272,8 +207,8 @@ async function submit(
       throw new Error("No fee info found");
     }
 
-    const client = await getSigningStargateClientForChainID(
-      multihopMessage.chainId,
+    const client = await getSigningCosmWasmClient(
+      multihopMessage.chain_id,
       signer,
       {
         gasPrice: GasPrice.fromString(
@@ -284,95 +219,14 @@ async function submit(
 
     const tx = await client.signAndBroadcast(msgJSON.sender, [msg], "auto");
 
-    const stargazeAddress = userAddresses["stargaze-1"];
-
-    const stargazeClient = await getStargateClientForChainID("stargaze-1");
-
-    const balanceBefore = await stargazeClient.getBalance(
-      stargazeAddress,
-      "ustars"
-    );
-
-    while (true) {
-      console.log("polling...");
-
-      const balance = await stargazeClient.getBalance(
-        stargazeAddress,
-        "ustars"
-      );
-
-      if (parseInt(balance.amount) > parseInt(balanceBefore.amount)) {
-        break;
-      }
-
-      await wait(1000);
-    }
+    console.log(tx);
   }
-
-  const stargazeSigner = await window.keplr.getOfflineSigner("stargaze-1");
-
-  const cosmwasmClient = await getSigningCosmWasmClient(
-    "stargaze-1",
-    stargazeSigner,
-    {
-      gasPrice: GasPrice.fromString(`1ustars`),
-    }
-  );
-
-  console.log(route.userSwapAmountOut);
-
-  const msg = {
-    typeUrl: "/cosmwasm.wasm.v1.MsgExecuteContract",
-    value: {
-      sender: userAddresses["stargaze-1"],
-      contract:
-        "stars1fvhcnyddukcqfnt7nlwv3thm5we22lyxyxylr9h77cvgkcn43xfsvgv0pl",
-      msg: Uint8Array.from(
-        Buffer.from(
-          JSON.stringify({
-            buy_now: {
-              collection: collectionAddr,
-              token_id: parseInt(tokenID),
-              expires: new BigNumber(Date.now() + 1000 * 60 * 60 * 24 * 7)
-                .mul(1000000)
-                .toString(),
-            },
-          })
-        )
-      ),
-      funds: [coin(bidAmount, "ustars")],
-    },
-  };
-
-  // const tx = await cosmwasmClient.execute(
-  //   userAddresses["stargaze-1"],
-  //   "stars1fvhcnyddukcqfnt7nlwv3thm5we22lyxyxylr9h77cvgkcn43xfsvgv0pl",
-  //   {
-  //     buy_now: {
-  //       collection: collectionAddr,
-  //       token_id: tokenID,
-  //       expires: Date.now() + 1000 * 60 * 60 * 24 * 7,
-  //     },
-  //   },
-  //   "auto",
-  //   "",
-  //   [coin(route.userSwapAmountOut, "ustars")]
-  // );
-
-  const tx = await cosmwasmClient.signAndBroadcast(
-    userAddresses["stargaze-1"],
-    [msg],
-    "auto"
-  );
-
-  console.log(tx);
 }
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function TokenPage() {
   const router = useRouter();
 
+  const [txPending, setTxPending] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState(ASSETS[0]);
 
   const [collectionAddress, tokenID] = useMemo(() => {
@@ -395,23 +249,14 @@ function TokenPage() {
     return parseFloat(ethers.formatUnits(token.price, 6));
   }, [token]);
 
-  const { data: amount, fetchStatus } = useGetAmount(
+  const { data: amountIn, fetchStatus } = useGetAmount(
     priceFloat,
     selectedAsset.id,
-    selectedAsset.chainID
+    selectedAsset.chainID,
+    selectedAsset.coinGeckoId
   );
 
-  const amountInWei = useMemo(() => {
-    if (!amount) {
-      return "0";
-    }
-
-    return ethers.parseUnits(amount.toFixed(6), 6).toString();
-  }, [amount]);
-
   const { chainRecords } = useManager();
-
-  const [txPending, setTxPending] = useState(false);
 
   const selectedChainRecord = useMemo(() => {
     return chainRecords.find(
@@ -420,21 +265,6 @@ function TokenPage() {
   }, [chainRecords, selectedAsset.chainID]) as ChainRecord;
 
   const { status: walletStatus, connect } = useChain(selectedChainRecord.name);
-
-  const { data: swapRoute } = useSwapRoute(
-    amountInWei,
-    {
-      denom: selectedAsset.id,
-      chainId: selectedAsset.chainID,
-    },
-    {
-      denom: "ustars",
-      chainId: "stargaze-1",
-    },
-    amountInWei !== "0" && selectedAsset.id !== "ustars"
-  );
-
-  console.log(swapRoute);
 
   if (!token || !collection) {
     return null;
@@ -484,9 +314,9 @@ function TokenPage() {
                   </div>
                   <div className="flex-1 font-semibold text-sm">
                     <Select.Value className="" />
-                    <p className="text-xs font-semibold text-zinc-500">
+                    {/* <p className="text-xs font-semibold text-zinc-500">
                       on Cosmos Hub
-                    </p>
+                    </p> */}
                   </div>
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -550,7 +380,9 @@ function TokenPage() {
                   </div>
                 )}
                 {fetchStatus !== "fetching" && (
-                  <p className="font-semibold">{amount && amount.toFixed(6)}</p>
+                  <p className="font-semibold">
+                    {amountIn && amountIn.toFixed(6)}
+                  </p>
                 )}
               </div>
             </div>
@@ -567,18 +399,24 @@ function TokenPage() {
                 <button
                   className="bg-pink-500 hover:bg-pink-600 font-semibold text-white text-sm h-14 rounded-md w-full transition-colors"
                   onClick={async () => {
-                    if (!swapRoute || !token) {
+                    // if (!swapRoute || !token) {
+                    //   return;
+                    // }
+
+                    if (!amountIn) {
                       return;
                     }
 
                     setTxPending(true);
-
                     try {
                       await submit(
-                        token.price,
+                        ethers.parseUnits(amountIn.toFixed(6), 6).toString(),
+                        selectedAsset.id,
+                        selectedAsset.chainID,
                         collectionAddress,
                         tokenID,
-                        swapRoute
+                        token.price
+                        // swapRoute
                       );
                     } finally {
                       setTxPending(false);
