@@ -157,7 +157,7 @@ async function submit(
                       ),
                       funds: [
                         {
-                          amount: ethers.parseUnits(tokenPrice, 6).toString(),
+                          amount: tokenPrice,
                           denom: "ustars",
                         },
                       ],
