@@ -119,7 +119,9 @@ async function submit(
   const msgsResponse = await getMessages(data);
 
   for (const multihopMessage of msgsResponse.msgs) {
-    let msgJSON = JSON.parse(multihopMessage.msg);
+    const msgJSON = JSON.parse(multihopMessage.msg);
+
+    let memo = JSON.parse(msgJSON.memo);
 
     const buyMsg = {
       buy_now: {
@@ -136,10 +138,10 @@ async function submit(
       },
     };
 
-    msgJSON.msg.swap_and_action.post_swap_action.ibc_transfer.ibc_info.receiver =
+    memo.wasm.msg.swap_and_action.post_swap_action.ibc_transfer.ibc_info.receiver =
       "stars1egt2qedl7ygmuhn6a6tshd6qlmhnsalfppwn9w29g9rarw98n55sat2247";
 
-    msgJSON.msg.swap_and_action.post_swap_action.ibc_transfer.ibc_info.memo =
+    memo.wasm.msg.swap_and_action.post_swap_action.ibc_transfer.ibc_info.memo =
       JSON.stringify({
         wasm: {
           contract:
@@ -181,13 +183,27 @@ async function submit(
         },
       });
 
+    // const msg = {
+    //   typeUrl: "/cosmwasm.wasm.v1.MsgExecuteContract",
+    //   value: {
+    //     sender: msgJSON.sender,
+    //     contract: msgJSON.contract,
+    //     msg: Uint8Array.from(Buffer.from(JSON.stringify(msgJSON.msg))),
+    //     funds: msgJSON.funds,
+    //   },
+    // };
+
     const msg = {
-      typeUrl: "/cosmwasm.wasm.v1.MsgExecuteContract",
+      typeUrl: multihopMessage.msg_type_url,
       value: {
+        sourcePort: msgJSON.source_port,
+        sourceChannel: msgJSON.source_channel,
+        token: msgJSON.token,
         sender: msgJSON.sender,
-        contract: msgJSON.contract,
-        msg: Uint8Array.from(Buffer.from(JSON.stringify(msgJSON.msg))),
-        funds: msgJSON.funds,
+        receiver: msgJSON.receiver,
+        timeoutHeight: msgJSON.timeout_height,
+        timeoutTimestamp: msgJSON.timeout_timestamp,
+        memo: JSON.stringify(memo),
       },
     };
 

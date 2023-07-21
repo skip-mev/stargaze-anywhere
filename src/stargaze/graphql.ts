@@ -108,7 +108,11 @@ export function useTokens(collectionID: string) {
     queryFn: async () => {
       const query = /* GraphQL */ `
         query TokensQuery($collectionAddr: String) {
-          tokens(collectionAddr: $collectionAddr, filterForSale: LISTED) {
+          tokens(
+            collectionAddr: $collectionAddr
+            filterForSale: LISTED
+            sortBy: PRICE_ASC
+          ) {
             pageInfo {
               total
             }
