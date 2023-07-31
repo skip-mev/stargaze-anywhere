@@ -22,6 +22,17 @@ export default function App({ Component, pageProps }: AppProps) {
         <QueryClientProvider client={queryClient}>
           <div className={inter.className}>
             <Component {...pageProps} />
+            <div className="max-w-screen-xl mx-auto p-4 py-8">
+              <p className="text-center">
+                Data Provided By:{" "}
+                <a
+                  className="text-pink-500 hover:underline"
+                  href="https://graphql.mainnet.stargaze-apis.com/graphql"
+                >
+                  https://graphql.mainnet.stargaze-apis.com/graphql
+                </a>
+              </p>
+            </div>
           </div>
         </QueryClientProvider>
       </ChainProvider>
